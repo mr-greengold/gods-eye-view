@@ -13,6 +13,30 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ## [Unreleased]
 
+### Fixed
+
+- Separate optional Google server credentials for Places and Street View from
+  the browser key, contributed by Tom-Neverwinter (#110). Provider Settings,
+  Pinokio's app-specific credential handling and setup diagnostics recognize
+  both keys. The Street View tool prefers the server key across environment
+  and `.env` sources. Existing single-key and keyless setups remain supported.
+
+- Complete the first-run, view-target prewarm, cockpit-plates and floor-hold
+  browser harness renderer portability fixes contributed by Tom-Neverwinter.
+  macOS retains Metal; other platforms default to SwiftShader. Cockpit renderer
+  assertions and evidence labels follow the actual selected mode. Floor-hold
+  explicitly selects its measured 2D billboard mode and keeps its mesh and terrain assertions; software runs are not real-GPU evidence.
+  First-run QA now checks the existing attribution Escape-close/focus-return
+  behavior while preserving the launcher-underneath regression checks.
+
+
+- Datacenter and dam factories are available through scoped package exports with
+  explicit context, overlay and render callbacks. The standalone app uses the
+  same implementation and bundled datasets.
+
+- Local GeoJSON layers share concurrent loads, cancel pending fetches on destruction,
+  discard late results, and remove their entity-context records on teardown.
+
 - Unchanged local infrastructure overlays no longer sustain idle rendering.
   Ground samples wait for visible terrain to settle and cannot place a marker
   below its loaded surface; roofs and valid below-sea-level heights are retained.

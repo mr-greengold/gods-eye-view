@@ -1,6 +1,29 @@
 # God's Eye View Current State
 
+## Google browser and server keys
+
+Local Places nearby/text search and the CCTV Street View fallback prefer
+`GOOGLE_MAPS_SERVER_API_KEY`, falling back to `GOOGLE_MAPS_API_KEY` when the
+server key is blank or absent. Only the browser key is injected into client
+code. Both are optional and configured in the same ignored root `.env`, or
+Pinokio's ignored `pinokio/ENVIRONMENT`, through Provider Settings or manual
+editing. `.env.example` and `pinokio/_ENVIRONMENT` document the two entries.
+The Street View headings tool uses the same server-first selection after
+resolving environment overrides per variable; its explicit `--key` wins.
+
+
 ## Infrastructure marker visibility
+
+Datacenter/dam registration uses fresh reusable factories with the application's
+existing context, overlay and render functions. The scoped package exports do
+not import standalone application globals; see
+[the infrastructure interface](INFRASTRUCTURE-LAYERS.md) for lifecycle and asset
+requirements.
+
+Local GeoJSON layers coalesce concurrent enables into one load. Disabling while
+loading keeps the result hidden; destruction aborts the fetch and rejects late
+parse/add results. Destruction and failed setup remove owned context records,
+so replacing a layer cannot retain stale entities or listeners.
 
 Datacenters and dams retain their full datasets while limiting active marker
 stems per layer: 80 at camera heights of 3,000 km or above, 200 from 200 km,
