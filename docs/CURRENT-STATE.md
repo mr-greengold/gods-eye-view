@@ -1,5 +1,45 @@
 # God's Eye View Current State
 
+Traffic and bikeshare expose factories through `./layers/traffic` and
+`./layers/bikeshare`. Traffic separates road requests, ingestion, animation,
+flow matching, styling, viewport lifecycle and development timing. Each source
+owns its decoded flow cache; cancelled bodies cannot refill it. Bikeshare
+separates its city registry, station source, parsing, rendering, selection and
+proximity lifecycle. Existing standalone sources, live/simulated labels, road
+budgets, station availability and polling behavior are retained.
+
+Installations and proximity context now expose `./layers/installations` and
+`./layers/awareness` factories. Each owns its records, selection, presentation,
+navigation and lifecycle. The standalone entries supply existing scene operations
+and the aircraft/vessel/installation instances used for proximity queries.
+Installation requests use a bounded source adapter; explicit nearby-place search
+remains separate from ordinary mapped-site loading. Invalid snapshots retain the
+previous display, and cancelled requests cannot publish a later failure state.
+Viewport limits, saturation retry, placement, query caps and controls are retained.
+
+Satellite and mission layers expose separate factories through `./layers/satellites`
+and `./layers/launches`. Each owns its catalog, render state, tracking, interaction
+and teardown. Source adapters retain the existing CelesTrak and Launch Library
+endpoints; standalone entries provide scene services and the satellite dependency.
+The mission factory separates paths, replay, camera, panel, overlays and placement.
+Pending mission requests abort on disable/destruction and malformed launch
+snapshots preserve the last accepted display. Catalog groups, propagation cadence,
+tracking intent, replay timing, controls and source attribution remain unchanged.
+
+The fire layer now exposes `./layers/firms`: an instance factory with separate
+snapshot requests, records, rendering, cards, selection, viewport scheduling and
+terrain-anchor batching. The standalone entry supplies the existing FIRMS source
+and scene services. Disable and teardown cancel pending refreshes; malformed
+snapshots preserve the last good display. Refresh restoration keeps selection
+identity without announcing a new user selection. Source/label, LOD thresholds,
+card limits, fire identities, altitude placement and analyst records are retained.
+
+Earthquake rendering is exposed through `./layers/earthquakes`. The layer owns
+its entities and request lifecycle; the application supplies the overlay host
+and snapshot source. The standalone adapter keeps the existing USGS daily feed,
+M2.5+ filtering, static discs, magnitude labels and analyst records. Disabling or
+destroying the layer cancels pending work and ignores late results.
+
 ## Vessel components and sources
 
 `src/data/aisLiveVessels.js` assembles `createVesselLayer` from the
@@ -3221,3 +3261,19 @@ nanoid 3.3.19. Cesium remains on 1.138.0. Browser QA uses Puppeteer 25.10.0;
 image-processing tools use Sharp 0.35.4. QA scripts await Puppeteer's asynchronous
 executable-path lookup before testing or passing the path to Chrome. Supported Node versions remain
 24.14.x and 26.x. Use `npm ci` to reproduce the checked-in dependency tree.
+
+### Traffic city navigation
+
+Traffic checks the final camera view on arrival and retries a failed road request
+while the camera is stationary, backing off from 1.5 to 30 seconds. Failed road
+requests report an unavailable source. Leaving the traffic altitude range or
+disabling the layer cancels pending work; superseded road and flow requests cannot
+release the current request or keep its loading indicator active.
+
+### Optional frame-rate readout
+
+Backtick (`) toggles an FPS readout beneath the title logo. It counts actual
+Cesium post-render events over one-second windows and does not request extra
+frames. Typing fields, modified keys and key repeats do not toggle it. The
+readout starts hidden each session and releases its timer and frame listener
+when hidden or when the application is disposed.
