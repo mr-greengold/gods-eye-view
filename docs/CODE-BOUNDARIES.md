@@ -169,3 +169,77 @@ accepts an optional `annotationGuidance` paragraph. Neither factory starts
 acquisition on import. Setup retains its pre-environment-load provenance capture
 and development-only registration. Package checks enumerate every owned module
 and reject browser imports of these Node entries.
+
+## Browser place search
+
+`gods-eye-view/search` exports an explicit geocoding service and Google/Photon
+adapters. The entry owns normalization, bounded caches, deadlines and fallback
+sequencing. It imports no application state, environment configuration, rendering
+or Node server code. Google transport is supplied by its caller.
+
+`src/standalone/placeSearch.js` constructs the configured Google request and
+keyless Photon fallback. The application passes this service to location
+controls, annotation resolution and voice/radio actions. Those consumers retain
+framing, landmark recovery, footprint matching and playback decisions. Existing
+reverse geocoding and nearby/text-search routes remain separate.
+
+## Panel controls
+
+`gods-eye-view/ui/panels` owns collapse-button binding, nearest-panel Escape
+handling, hover delays and delayed content-focus handoff. It accepts existing
+DOM elements and callbacks; importing it creates no browser state. `destroy()`
+removes owned listeners and cancels pending work without changing saved state
+or moving focus. Call it before removing or replacing the controls.
+
+`src/ui.js` retains panel layout, persistence, share restoration and application
+reactions to state changes. Map Source selection and Location draft cleanup are
+provided through callbacks. The component imports no globe, data, application
+or server modules. Package checks and scoped formatting cover this entry.
+
+## Surface keyboard handling
+
+`gods-eye-view/ui/surfaces` exports `createSurfaceKeyboard` from
+`src/ui/surfaceKeyboard.js`. It receives a root DOM node, an optional document,
+an `isActive` predicate, an `onEscape` action and an optional return-focus fallback.
+Construction is inert. `activate()` remembers the opener and installs one capture
+listener; repeated activation is harmless. `deactivate({ restoreFocus: true })`
+removes that listener and restores the opener when connected, otherwise invoking
+the supplied fallback. Omit return focus when yielding to another surface.
+`destroy()` permanently releases ownership without moving focus.
+
+The welcome launcher and Provider Settings retain content, visibility, initial
+focus, animation and screen-specific policy. Tab boundaries are read from the
+current visible/enabled controls for each key; ordinary movement within those
+boundaries remains native. The component honors already-handled keys and has no
+app, server, storage or network dependencies. Its package boundary is checked
+independently from the standalone screens that consume it.
+
+## Panel rail layout
+
+`gods-eye-view/ui/layout` exports synchronous `layoutLeftPanelRail` and
+`layoutRightPanelRail` passes, `measurePanelNaturalHeight`, and the existing pure
+corridor/allocation helpers. Separate modules own left placement, right placement,
+DOM height measurement and rail geometry. They import no application, renderer,
+server, storage or network modules; package checks build this entry independently.
+
+Callers supply rail/obstacle DOM nodes, the viewport, HUD state, the preferred
+panel, disclosure/retry callbacks and the left measurement cache. Right layout
+reads the caller's Display scroll value at measurement time and restores it
+within the resulting scroll range. The left pass notifies its caller after
+alignment so the right pass can follow. Neither pass installs listeners, timers
+or observers; construction/import does no work. Scheduling, preference writes,
+share restoration and movement of controls between containers remain caller-owned.
+Existing helper imports from `cockpitMath.js` and `rightRailPolicy.js` remain
+compatible through re-exports.
+
+## Visual input
+
+`gods-eye-view/ui/input` exports `bindApplicationShortcuts` and
+`createStyleParameters`. The shortcut binder owns one bubbling keydown listener
+and receives the document, editing target and explicit action callbacks.
+Parameter controls own only the supplied container's generated rows/listeners;
+uniform metadata and read/write/change operations come from the caller.
+Clearing permits reuse; destruction is final. Neither module imports the app,
+renderer, persistence or services. The facade retains panel visibility, share
+restore claims and render scheduling. Both controls are destroyed before the
+facade's asynchronous teardown can yield.

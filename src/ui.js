@@ -1,3 +1,6 @@
+import { bindApplicationShortcuts, createStyleParameters } from './ui/visualInput.js';
+import { layoutLeftPanelRail, layoutRightPanelRail } from './ui/panelRails.js';
+import { bindPanelDisclosure, collapsePanelOnEscape, createHoverDisclosure } from './ui/panelDisclosure.js';
 import * as Cesium from 'cesium';
 import { retroShader } from './styles/retro.js';
 import { animeShader } from './styles/anime.js';
@@ -108,14 +111,7 @@ import {
 } from './contextModePolicy.js';
 import {
   shouldExpandGlobalContextPanel,
-  shouldHideCollapsedRightPanels,
 } from './rightRailPolicy.js';
-import {
-  allocatePanelStackHeights,
-  panelStackAutoCollapseIndices,
-  resolveLeftStackBottomBoundary,
-  resolvePanelStackCorridor,
-} from './panelStackLayout.js';
 import {
   resolveCockpitUtilityAnchor,
   resolveCockpitUtilityLayout,
@@ -2189,9 +2185,10 @@ export class StyleManager {
    * @param {Cesium.Viewer} viewer - The CesiumJS viewer instance.
    * @param {object} [options]
    */
-  constructor(viewer, { mapStackController = null } = {}) {
+  constructor(viewer, { mapStackController = null, placeSearch } = {}) {
     this.viewer = viewer;
     this.mapStackController = mapStackController;
+    this.placeSearch = placeSearch;
     this.stages = {};
     this.activeStyle = 'normal';
     document.documentElement.dataset.gevStyle = this.activeStyle;
@@ -3403,51 +3400,37 @@ export class StyleManager {
       btn.addEventListener('click', () => this.setStyle(btn.dataset.style));
     });
 
-    // Keyboard shortcuts: 1-7, H, Escape
-    this._globalKeydownHandler = (e) => {
-      // Ignore when interacting with a form control (except Escape). Global
-      // hotkeys ('1'-'7', 'h', 'o', 'v', 'd', 'c', 'f') otherwise fire while a
-      // <select> dropdown (e.g. HUD layout) is focused and its native
-      // type-ahead is in use, or while typing in a text field (M9).
-      const isFormControl = e.target?.matches?.('select, input, textarea')
-        || e.target === this._locationSearch;
-      if (isFormControl && e.key !== 'Escape') return;
-
-      const keyMap = {
-        '1': 'normal', '2': 'retro', '3': 'surveillance',
-        '4': 'thermal', '5': 'anime', '6': 'noir',
-        '7': 'snow',
-      };
-      if (keyMap[e.key]) this.setStyle(keyMap[e.key]);
-      if (e.key === 'Escape') {
-        if (this._locationSearch.classList.contains('expanded')) {
-          this._locationSearch.classList.remove('expanded');
-          this._locationSearch.value = '';
-          this._locationSearch.blur();
-        }
-      }
-      if (e.key.toLowerCase() === 'h') {
-        this.shareLinkManager?.claimRestoreLane?.('visual');
-        this.hud.toggle();
-        this._updateHudButtonState();
-        this._syncShareState();
-      }
-      if (e.key.toLowerCase() === 'o') this._toggleOrbit();
-      if (e.key.toLowerCase() === 'v') this.toggleCleanView();
-      if (e.key.toLowerCase() === 'f') {
-        document.getElementById('data-panel').classList.toggle('active');
-      }
-      if (e.key.toLowerCase() === 'd') {
-        this.shareLinkManager?.claimRestoreLane?.('visual');
-        this._detectionUserOverridden = true;
-        cycleDetectionMode();
-        this._syncShareState();
-      }
-      if (e.key.toLowerCase() === 'c') {
-        this._toggleCctvEnabled();
-      }
-    };
-    document.addEventListener('keydown', this._globalKeydownHandler);
+    this._applicationShortcuts?.destroy();
+    this._applicationShortcuts = bindApplicationShortcuts({
+      documentRef: document,
+      searchInput: this._locationSearch,
+      actions: {
+        setStyle: (style) => this.setStyle(style),
+        dismissSearch: () => {
+          if (this._locationSearch.classList.contains('expanded')) {
+            this._locationSearch.classList.remove('expanded');
+            this._locationSearch.value = '';
+            this._locationSearch.blur();
+          }
+        },
+        toggleHud: () => {
+          this.shareLinkManager?.claimRestoreLane?.('visual');
+          this.hud.toggle();
+          this._updateHudButtonState();
+          this._syncShareState();
+        },
+        toggleOrbit: () => this._toggleOrbit(),
+        toggleCleanView: () => this.toggleCleanView(),
+        toggleLayers: () => document.getElementById('data-panel').classList.toggle('active'),
+        cycleDetection: () => {
+          this.shareLinkManager?.claimRestoreLane?.('visual');
+          this._detectionUserOverridden = true;
+          cycleDetectionMode();
+          this._syncShareState();
+        },
+        toggleCctv: () => this._toggleCctvEnabled(),
+      },
+    });
 
     // Bloom toggle
     this._bloomBtn.addEventListener('click', () => {
@@ -4008,23 +3991,24 @@ export class StyleManager {
    * @returns {void}
    */
   _initPanelChrome() {
-    const targets = new Set();
-    document.querySelectorAll('.panel-collapse-btn[data-collapse-target]').forEach((btn) => {
-      const targetId = btn.dataset.collapseTarget;
-      if (targetId) targets.add(targetId);
-      btn.addEventListener('click', () => {
-        const targetId = btn.dataset.collapseTarget;
-        if (!targetId) return;
-        const nextCollapsed = !document.getElementById(targetId)?.classList.contains('collapsed');
-        this.setPanelCollapsed(targetId, nextCollapsed, { explicit: true });
-      });
+    for (const control of this._panelDisclosureControls || []) control.destroy();
+    this._panelDisclosureControls = [];
+    const targets = new Map();
+    document.querySelectorAll('.panel-collapse-btn[data-collapse-target]').forEach((button) => {
+      const targetId = button.dataset.collapseTarget;
+      if (!targetId) return;
+      if (!targets.has(targetId)) targets.set(targetId, []);
+      targets.get(targetId).push(button);
     });
-
-    for (const targetId of targets) {
-      const panelEl = document.getElementById(targetId);
-      panelEl?.addEventListener('keydown', (event) => {
-        this._collapsePanelOnEscape(event, targetId);
-      });
+    for (const [targetId, buttons] of targets) {
+      const panel = document.getElementById(targetId);
+      if (!panel) continue;
+      this._panelDisclosureControls.push(bindPanelDisclosure({
+        panel,
+        buttons,
+        onChange: (collapsed, options) => this.setPanelCollapsed(targetId, collapsed, options),
+        onEscape: (event) => this._collapsePanelOnEscape(event, targetId),
+      }));
       this._restorePanelCollapsedState(targetId, {
         allowStored: !this._initialShareState,
       });
@@ -4051,33 +4035,16 @@ export class StyleManager {
    * @returns {boolean} Whether this panel handled the key.
    */
   _collapsePanelOnEscape(event, panelId) {
-    if (event.key !== 'Escape' || event.defaultPrevented) return false;
-    const panelEl = document.getElementById(panelId);
-    if (!panelEl || panelEl.classList.contains('collapsed') || !panelEl.contains(event.target)) {
-      return false;
-    }
-    const focusedPanel = event.target?.closest?.(
-      '.panel-collapsible:not(.collapsed), #param-slider-panel:not(.collapsed)',
-    );
-    if (focusedPanel && focusedPanel !== panelEl) return false;
-    event.preventDefault();
-    event.stopPropagation();
-    if (panelId === 'location-bar' && this._locationSearch) {
-      // The document-level Escape cleanup cannot run after this panel consumes
-      // the event. Mirror that cleanup here so reopening Location never reveals
-      // a hidden draft query or expanded search field.
-      this._locationSearch.classList.remove('expanded');
-      this._locationSearch.value = '';
-      this._locationSearch.blur();
-    }
-    this.setPanelCollapsed(panelId, true, { explicit: true });
-    const disclosure = panelEl.querySelector(`[data-dock-toggle-target="${panelId}"]`)
-      || panelEl.querySelector(`[data-collapse-target="${panelId}"]`);
-    const escapedFromDisclosure = event.target === disclosure
-      || disclosure?.contains?.(event.target);
-    if (escapedFromDisclosure) disclosure?.blur?.();
-    else disclosure?.focus?.({ preventScroll: true });
-    return true;
+    return collapsePanelOnEscape(event, {
+      panel: document.getElementById(panelId),
+      onChange: (collapsed, options) => this.setPanelCollapsed(panelId, collapsed, options),
+      beforeCollapse: () => {
+        if (panelId !== 'location-bar' || !this._locationSearch) return;
+        this._locationSearch.classList.remove('expanded');
+        this._locationSearch.value = '';
+        this._locationSearch.blur();
+      },
+    });
   }
 
   /**
@@ -4219,191 +4186,28 @@ export class StyleManager {
    * @returns {void}
    */
   _initAutoHoverPanel(panelId, { openDelayMs = 850, closeDelayMs = 1000 } = {}) {
-    const panelEl = document.getElementById(panelId);
-    if (!panelEl) return;
-    const disclosure = panelEl.querySelector(`[data-dock-toggle-target="${panelId}"]`);
-    let openTimer = null;
-    let closeTimer = null;
-    let lastWheelTime = 0;
-    let disclosureFocusTimer = null;
-    let focusRequest = 0;
-
-    const cancelMapSourceFocus = () => {
-      clearTimeout(disclosureFocusTimer);
-      disclosureFocusTimer = null;
-      focusRequest += 1;
-    };
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    this._hoverPanelControls ??= new Map();
+    this._hoverPanelControls.get(panelId)?.destroy();
+    const controller = createHoverDisclosure({
+      panel,
+      documentRef: document,
+      disclosure: panel.querySelector(`[data-dock-toggle-target="${panelId}"]`),
+      openDelayMs,
+      closeDelayMs,
+      isActive: () => !this._disposed,
+      onChange: (collapsed, options) => this.setPanelCollapsed(panelId, collapsed, options),
+      onEscape: (event) => this._collapsePanelOnEscape(event, panelId),
+      focusTarget: panelId === 'control-panel' ? () => (
+        panel.querySelector('.map-stack-chip.active') || panel.querySelector('.map-stack-chip')
+      ) : null,
+    });
+    this._hoverPanelControls.set(panelId, controller);
     if (panelId === 'control-panel') {
       this._cancelMapSourceFocus?.();
-      this._cancelMapSourceFocus = cancelMapSourceFocus;
+      this._cancelMapSourceFocus = controller.cancelPendingFocus;
     }
-
-    const clearOpen = () => {
-      if (!openTimer) return;
-      clearTimeout(openTimer);
-      openTimer = null;
-    };
-
-    const clearClose = () => {
-      if (!closeTimer) return;
-      clearTimeout(closeTimer);
-      closeTimer = null;
-    };
-
-    const scheduleOpen = () => {
-      clearOpen();
-      openTimer = window.setTimeout(() => {
-        openTimer = null;
-        if (!panelEl.matches(':hover')) return;
-        if (performance.now() - lastWheelTime < 280) return;
-        if (!panelEl.classList.contains('collapsed')) return;
-        this.setPanelCollapsed(panelId, false);
-      }, openDelayMs);
-    };
-
-    // Focus inside the tray defers the unpinned auto-dismiss, but only for the
-    // KEYBOARD: the disclosure hands focus to a Map Source tile on Enter/Space,
-    // and closing the tray out from under that focus would strand the caret.
-    // Plain `document.activeElement` is the wrong test — Chromium focuses a
-    // <button> on mouse press, so once Map Source moved into this tray a tile
-    // CLICK left focus parked inside and the popover never dismissed on
-    // mouse-away (owner field report; Location, whose input is genuinely
-    // keyboard-focused when clicked, still dismissed). `:focus-visible` is the
-    // platform's own pointer-vs-keyboard focus signal, so a typed-into field
-    // still holds the tray open while a clicked tile does not. A browser
-    // without `:focus-visible` keeps the conservative hold.
-    const keyboardFocusInside = () => {
-      const active = document.activeElement;
-      if (!active || !panelEl.contains(active)) return false;
-      try { return active.matches(':focus-visible'); } catch { return true; }
-    };
-
-    const scheduleClose = () => {
-      clearClose();
-      closeTimer = window.setTimeout(() => {
-        closeTimer = null;
-        if (panelEl.matches(':hover') || keyboardFocusInside()) return;
-        if (panelEl.classList.contains('dock-pinned')) return;
-        if (panelEl.classList.contains('collapsed')) return;
-        this.setPanelCollapsed(panelId, true);
-      }, closeDelayMs);
-    };
-
-    panelEl.addEventListener('wheel', () => {
-      lastWheelTime = performance.now();
-      clearOpen();
-    }, { passive: true });
-
-    panelEl.addEventListener('click', (event) => {
-      if (event.target.closest('.panel-collapse-btn, .dock-tray-toggle')) return;
-      clearOpen();
-      clearClose();
-      if (panelEl.classList.contains('collapsed')) {
-        this.setPanelCollapsed(panelId, false, { explicit: true });
-      }
-    });
-
-    panelEl.addEventListener('pointerenter', (event) => {
-      const pointerType = event.pointerType || 'mouse';
-      if (pointerType !== 'mouse' && pointerType !== 'pen') return;
-      clearClose();
-      if (panelEl.classList.contains('collapsed')) {
-        scheduleOpen();
-      }
-    });
-
-    panelEl.addEventListener('pointerleave', (event) => {
-      const pointerType = event.pointerType || 'mouse';
-      if (pointerType !== 'mouse' && pointerType !== 'pen') return;
-      clearOpen();
-      scheduleClose();
-    });
-
-    panelEl.addEventListener('pointerdown', () => {
-      cancelMapSourceFocus();
-      clearOpen();
-      clearClose();
-    });
-
-    const focusMapSource = () => {
-      if (panelId !== 'control-panel') return false;
-      const chip = panelEl.querySelector('.map-stack-chip.active')
-        || panelEl.querySelector('.map-stack-chip');
-      if (!chip?.focus) return false;
-      chip.focus({ preventScroll: true });
-      // .focus() on a still-hidden element is a SILENT no-op, so the caller
-      // has to check whether focus actually landed rather than assume it did.
-      return document.activeElement === chip;
-    };
-
-    // The tray opens behind a 180ms `visibility` transition (.dock-popover-content
-    // in style.css), and a chip inside it cannot take focus until that lands.
-    // A single fixed delay therefore races the transition: when the machine is
-    // slow enough that the fade has not finished by the time the timer fires,
-    // focus() silently does nothing and the keyboard user is stranded on the
-    // disclosure with an open tray they cannot reach (#54). Retry on a short
-    // cadence until focus actually lands, bounded so a permanently hidden tray
-    // cannot spin.
-    const scheduleMapSourceFocus = () => {
-      cancelMapSourceFocus();
-      if (panelId !== 'control-panel') return;
-      const request = focusRequest;
-      let attempts = 0;
-      const attemptFocus = () => {
-        if (request !== focusRequest) return;
-        disclosureFocusTimer = null;
-        if (this._disposed || panelEl.classList.contains('collapsed')) return;
-        // A Tab or click elsewhere owns focus now. A delayed transition must
-        // not pull the keyboard back into a tray the user has already left.
-        if (document.activeElement !== disclosure) return;
-        if (focusMapSource()) return;
-        if (request !== focusRequest) return;
-        if (++attempts > 24) return; // ~720ms past the first try, then give up
-        disclosureFocusTimer = window.setTimeout(attemptFocus, 30);
-      };
-      disclosureFocusTimer = window.setTimeout(attemptFocus, 240);
-    };
-
-    const toggleDisclosure = ({ focusSource = false } = {}) => {
-      cancelMapSourceFocus();
-      clearOpen();
-      clearClose();
-      const shouldOpen = panelEl.classList.contains('collapsed');
-      this.setPanelCollapsed(panelId, !shouldOpen, { explicit: true });
-      if (shouldOpen && focusSource) scheduleMapSourceFocus();
-    };
-
-    disclosure?.addEventListener('click', (event) => {
-      event.stopPropagation();
-      // Keep native button activation semantics: Enter activates on keydown,
-      // Space on keyup, and pointer clicks report a non-zero detail. Scheduling
-      // focus from the synthesized click avoids a key latch that can outlive the
-      // disclosure after a long Enter hold moves focus into the tray.
-      toggleDisclosure({ focusSource: event.detail === 0 });
-    });
-    disclosure?.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter') return;
-      // Preserve immediate Enter activation while leaving Space to the native
-      // button path, which emits its synthesized click only after key release.
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.repeat) return;
-      toggleDisclosure({ focusSource: true });
-    });
-
-    panelEl.addEventListener('focusin', () => clearClose());
-    panelEl.addEventListener('focusout', (event) => {
-      cancelMapSourceFocus();
-      if (panelEl.contains(event.relatedTarget)) return;
-      scheduleClose();
-    });
-    panelEl.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') return;
-      if (!event.defaultPrevented) this._collapsePanelOnEscape(event, panelId);
-      cancelMapSourceFocus();
-      clearOpen();
-      clearClose();
-    });
   }
 
   /**
@@ -7045,187 +6849,20 @@ export class StyleManager {
    * @returns {void}
    */
   _syncRightPanelAdaptiveLayout() {
-    const stack = this._rightPanelStack;
-    if (!stack) return;
-
-    const panels = [...stack.children].filter((panel) => panel.matches('[data-panel-id]'));
-    if (!this.hud.visible || this.hud.getVariant() !== 'tactical') {
-      for (const panel of panels.filter((item) => item.classList.contains('layout-auto-collapsed'))) {
-        panel.classList.remove('collapsed', 'layout-auto-collapsed');
-        this._syncPanelCollapseButton(panel);
-      }
-    }
-    const isMobile = window.matchMedia('(max-width: 720px)').matches;
-    const hasExpandedPanel = panels.some((panel) => (
-      !panel.classList.contains('collapsed') && (!isMobile || panel.id !== 'pp-toggles')
-    ));
-    const exclusive = shouldHideCollapsedRightPanels({
-      hudVariant: this.hud.getVariant(),
-      hasExpandedPanel,
+    layoutRightPanelRail({
+      stack: this._rightPanelStack,
+      obstacles: document.querySelectorAll(RIGHT_STACK_OBSTACLE_SELECTOR),
+      windowRef: window,
+      hud: { visible: this.hud.visible, variant: this.hud.getVariant() },
+      preferredPanelId: this._rightStackPreferredPanelId,
+      onCollapse: (panel) => this._syncPanelCollapseButton(panel),
+      onRetry: () => this._scheduleRightPanelLayout(),
+      leftStack: this._leftPanelStack,
+      displayPanel: this._ppToggles,
+      readDisplayScrollTop: () => this._displayPortalScrollRestoreOwner === 'standard'
+        ? this._standardDisplayScrollTop
+        : (this._ppToggles?.scrollTop || 0),
     });
-    stack.classList.toggle('layout-exclusive', exclusive);
-    for (const panel of panels) {
-      if (exclusive && panel.classList.contains('collapsed')) panel.setAttribute('aria-hidden', 'true');
-      else panel.removeAttribute('aria-hidden');
-    }
-
-    if (isMobile) {
-      stack.classList.remove('layout-focus');
-      stack.style.removeProperty('--right-stack-safe-top');
-      stack.style.removeProperty('--right-stack-max-height');
-      for (const panel of panels) panel.style.removeProperty('--right-panel-allocated-height');
-      stack.dataset.layoutMode = 'mobile';
-      return;
-    }
-
-    const viewportHeight = Math.max(1, window.innerHeight);
-    const safeGap = Math.max(8, viewportHeight * 0.012);
-    const stackRect = stack.getBoundingClientRect();
-    const leftStackTop = this._leftPanelStack?.getBoundingClientRect().top;
-    const alignedTop = Number.isFinite(leftStackTop)
-      ? leftStackTop
-      : viewportHeight * 0.26;
-    const obstacleRects = [];
-
-    for (const obstacle of document.querySelectorAll(RIGHT_STACK_OBSTACLE_SELECTOR)) {
-      if (stack.contains(obstacle)) continue;
-      let hiddenByAncestor = false;
-      for (let element = obstacle; element; element = element.parentElement) {
-        const style = getComputedStyle(element);
-        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
-          hiddenByAncestor = true;
-          break;
-        }
-      }
-      if (hiddenByAncestor) continue;
-      const rect = obstacle.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) continue;
-      obstacleRects.push({
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        bottom: rect.bottom,
-      });
-    }
-
-    const visiblePanels = panels.filter((panel) => (
-      !exclusive || !panel.classList.contains('collapsed')
-    ));
-    const displayScrollTop = this._displayPortalScrollRestoreOwner === 'standard'
-      ? this._standardDisplayScrollTop
-      : (this._ppToggles?.scrollTop || 0);
-    // Measure intrinsic content, not the allocation written by the previous
-    // layout pass. Display is the exception: its own scrollHeight already
-    // exposes every control, and removing its live allocation can reset the
-    // user's scroll position while HUD or preset content is settling.
-    for (const panel of visiblePanels) {
-      if (!panel.classList.contains('collapsed') && panel !== this._ppToggles) {
-        panel.style.removeProperty('--right-panel-allocated-height');
-      }
-    }
-    const gap = parseFloat(getComputedStyle(stack).rowGap) || 0;
-    const naturalHeight = visiblePanels.reduce((total, panel) => (
-      total + Math.max(
-        panel.getBoundingClientRect().height,
-        panel.scrollHeight || 0,
-        panel.classList.contains('collapsed') ? 42 : 0,
-      )
-    ), 0) + gap * Math.max(0, visiblePanels.length - 1);
-    const layout = resolveHudRailLayout({
-      viewportHeight,
-      panelHeight: naturalHeight,
-      laneLeft: stackRect.left,
-      laneRight: stackRect.right,
-      obstacles: obstacleRects,
-      baseTop: alignedTop,
-      baseBottom: viewportHeight * 0.96,
-      gap: safeGap,
-      align: 'start',
-    });
-    if (!layout) return;
-    const { safeTop, safeBottom, maxHeight: availableHeight } = layout;
-    const stabilityBand = viewportHeight * 0.01;
-    const wasFocused = stack.classList.contains('layout-focus');
-    const shouldFocus = wasFocused
-      ? naturalHeight > availableHeight - stabilityBand * 2
-      : naturalHeight > availableHeight - stabilityBand;
-    const layoutTop = shouldFocus ? safeTop : layout.top;
-    const collapsedHeight = visiblePanels.reduce((total, panel) => (
-      panel.classList.contains('collapsed')
-        ? total + panel.getBoundingClientRect().height
-        : total
-    ), 0);
-    const expandedPanelsInDomOrder = visiblePanels.filter((panel) => !panel.classList.contains('collapsed'));
-    const focusedExpandedPanel = expandedPanelsInDomOrder.find((panel) => panel.contains(document.activeElement));
-    const preferredExpandedPanel = expandedPanelsInDomOrder.find(
-      (panel) => panel.id === this._rightStackPreferredPanelId,
-    ) || focusedExpandedPanel;
-    // Match the left lane: allocation order follows the latest explicit
-    // disclosure, not DOM order. A focused panel is the fallback owner so
-    // temporary presentation collapse never strands keyboard focus.
-    const expandedPanels = preferredExpandedPanel
-      ? [preferredExpandedPanel, ...expandedPanelsInDomOrder.filter((panel) => panel !== preferredExpandedPanel)]
-      : expandedPanelsInDomOrder;
-    const expandedAvailableHeight = Math.max(
-      0,
-      safeBottom - layoutTop - collapsedHeight - gap * Math.max(0, visiblePanels.length - 1),
-    );
-    const expandedHeights = allocatePanelStackHeights({
-      naturalHeights: expandedPanels.map((panel) => Math.max(
-        panel.getBoundingClientRect().height,
-        panel.scrollHeight || 0,
-      )),
-      availableHeight: expandedAvailableHeight,
-    });
-    const autoCollapseIndices = this.hud.visible ? panelStackAutoCollapseIndices({
-      naturalHeights: expandedPanels.map((panel) => Math.max(
-        panel.getBoundingClientRect().height,
-        panel.scrollHeight || 0,
-      )),
-      allocatedHeights: expandedHeights,
-      collapseLaterPanels: shouldFocus && this.hud.getVariant() === 'tactical',
-    }) : [];
-    if (autoCollapseIndices.length) {
-      for (const index of autoCollapseIndices) {
-        const panel = expandedPanels[index];
-        panel.classList.add('collapsed', 'layout-auto-collapsed');
-        this._syncPanelCollapseButton(panel);
-      }
-      this._scheduleRightPanelLayout();
-      return;
-    }
-    // Write-if-changed. This pass runs on the 500 ms stats cadence, and an
-    // unconditional REMOVE-then-SET of an unchanged allocation is two style
-    // mutations per tick on `#pp-toggles` (the one panel the measure-strip
-    // above deliberately skips) — churn that reads as a genuine panel move to
-    // the world-overlay host's occluder observer and defeats parked-idle
-    // render savings. Only a real allocation change may touch the attribute.
-    expandedPanels.forEach((panel, index) => {
-      const next = `${expandedHeights[index].toFixed(1)}px`;
-      if (panel.style.getPropertyValue('--right-panel-allocated-height') !== next) {
-        panel.style.setProperty('--right-panel-allocated-height', next);
-      }
-    });
-    for (const panel of panels) {
-      if (expandedPanels.includes(panel)) continue;
-      panel.style.removeProperty('--right-panel-allocated-height');
-    }
-
-    stack.style.setProperty('--right-stack-safe-top', `${layoutTop.toFixed(1)}px`);
-    stack.style.setProperty('--right-stack-max-height', `${Math.max(0, safeBottom - layoutTop).toFixed(1)}px`);
-    stack.classList.toggle('layout-focus', shouldFocus);
-    stack.dataset.layoutMode = shouldFocus ? 'focus' : 'normal';
-    stack.dataset.safeTop = layoutTop.toFixed(1);
-    stack.dataset.safeBottom = safeBottom.toFixed(1);
-    stack.dataset.availableHeight = availableHeight.toFixed(1);
-    stack.dataset.requiredHeight = naturalHeight.toFixed(1);
-    stack.dataset.expandedCount = String(expandedPanels.length);
-
-    if (this._ppToggles && expandedPanels.includes(this._ppToggles)) {
-      const maxScrollTop = Math.max(0, this._ppToggles.scrollHeight - this._ppToggles.clientHeight);
-      this._ppToggles.scrollTop = Math.min(displayScrollTop, maxScrollTop);
-    }
-
   }
 
   /**
@@ -7330,264 +6967,23 @@ export class StyleManager {
   }
 
   /**
-   * Estimates an expanded panel's unconstrained content height from its
-   * visible direct children and their scroll extents. This avoids treating a
-   * flex-grown panel as naturally tall while still accounting for nested lists.
-   * @param {HTMLElement} panel - Expanded accordion panel.
-   * @returns {number} Natural height in rendered CSS pixels.
-   */
-  _measureLeftPanelNaturalHeight(panel) {
-    const inner = [...panel.children].find((child) => !child.classList.contains('panel-glow'));
-    if (!inner) return Math.ceil(panel.scrollHeight || panel.getBoundingClientRect().height);
-
-    const innerRect = inner.getBoundingClientRect();
-    const panelStyle = getComputedStyle(panel);
-    const innerStyle = getComputedStyle(inner);
-    const paddingBottom = parseFloat(innerStyle.paddingBottom) || 0;
-    let contentBottom = parseFloat(innerStyle.paddingTop) || 0;
-
-    for (const child of inner.children) {
-      const childStyle = getComputedStyle(child);
-      if (childStyle.display === 'none' || childStyle.visibility === 'hidden') continue;
-      const childRect = child.getBoundingClientRect();
-      const marginBottom = parseFloat(childStyle.marginBottom) || 0;
-      const naturalChildHeight = Math.max(childRect.height, child.scrollHeight || 0);
-      const childBottom = childRect.top - innerRect.top + naturalChildHeight + marginBottom;
-      contentBottom = Math.max(contentBottom, childBottom);
-    }
-
-    const wrapperChrome = (parseFloat(panelStyle.borderTopWidth) || 0)
-      + (parseFloat(panelStyle.borderBottomWidth) || 0)
-      + (parseFloat(panelStyle.paddingTop) || 0)
-      + (parseFloat(panelStyle.paddingBottom) || 0);
-    return Math.ceil(contentBottom + paddingBottom + wrapperChrome);
-  }
-
-  /**
    * Measures a live obstacle-free corridor for the left accordion and toggles
    * focus mode only when the expanded panel plus sibling labels cannot fit.
    * Safe boundaries are written as viewport-relative CSS values.
    * @returns {void}
    */
   _syncLeftPanelAdaptiveLayout() {
-    const stack = this._leftPanelStack;
-    if (!stack) return;
-
-    const panels = [...stack.querySelectorAll(':scope > [data-panel-id]')];
-    if (!panels.length) return;
-    if (!this.hud.visible || this.hud.getVariant() !== 'tactical') {
-      for (const panel of panels.filter((item) => item.classList.contains('layout-auto-collapsed'))) {
-        panel.classList.remove('collapsed', 'layout-auto-collapsed');
-        this._syncPanelCollapseButton(panel);
-      }
-    }
-
-    // The existing narrow-screen composition has its own full-width stack.
-    // Keep this desktop lane engine from fighting those dedicated rules.
-    if (window.matchMedia('(max-width: 720px)').matches) {
-      stack.classList.remove('layout-focus');
-      stack.classList.remove('layout-tail');
-      stack.style.removeProperty('--left-stack-safe-top');
-      stack.style.removeProperty('--left-stack-safe-bottom');
-      stack.style.removeProperty('--left-stack-centered-height');
-      stack.dataset.layoutMode = 'mobile';
-      for (const panel of panels) {
-        panel.removeAttribute('aria-hidden');
-        panel.style.removeProperty('--left-panel-allocated-height');
-      }
-      return;
-    }
-
-    const viewportHeight = Math.max(1, window.innerHeight);
-    const stackRect = stack.getBoundingClientRect();
-    const baseTop = viewportHeight * 0.26;
-    const baseBottomInset = viewportHeight * 0.04;
-    const safeGap = viewportHeight * 0.012;
-    let obstacleSafeTop = viewportHeight * 0.04;
-    let safeTop = baseTop;
-    let safeBottom = viewportHeight - baseBottomInset;
-    const bottomObstacles = [];
-
-    for (const obstacle of document.querySelectorAll(LEFT_STACK_OBSTACLE_SELECTOR)) {
-      if (stack.contains(obstacle)) continue;
-      let hiddenByAncestor = false;
-      for (let element = obstacle; element; element = element.parentElement) {
-        const style = getComputedStyle(element);
-        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
-          hiddenByAncestor = true;
-          break;
-        }
-      }
-      if (hiddenByAncestor) continue;
-      const rect = obstacle.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) continue;
-      const overlapsHorizontally = rect.right > stackRect.left && rect.left < stackRect.right;
-      if (!overlapsHorizontally) continue;
-
-      if (rect.top < baseTop && rect.bottom <= viewportHeight * 0.5) {
-        const obstacleBottom = rect.bottom + safeGap;
-        obstacleSafeTop = Math.max(obstacleSafeTop, obstacleBottom);
-        safeTop = Math.max(safeTop, obstacleBottom);
-      } else if (rect.top >= baseTop) {
-        bottomObstacles.push({ top: rect.top });
-      }
-    }
-    safeBottom = resolveLeftStackBottomBoundary({
-      baseBottom: safeBottom,
-      obstacles: bottomObstacles,
-      safeGap,
+    layoutLeftPanelRail({
+      stack: this._leftPanelStack,
+      obstacles: document.querySelectorAll(LEFT_STACK_OBSTACLE_SELECTOR),
+      windowRef: window,
+      hud: { visible: this.hud.visible, variant: this.hud.getVariant() },
+      preferredPanelId: this._leftStackPreferredPanelId,
+      onCollapse: (panel) => this._syncPanelCollapseButton(panel),
+      onRetry: () => this._scheduleLeftPanelLayout(),
+      collapsedHeights: this._leftStackCollapsedHeights,
+      onAligned: () => this._scheduleRightPanelLayout(),
     });
-
-    const obstacleSafeBottom = safeBottom;
-
-    // Keep the accordion visually centered when the balanced corridor remains
-    // useful. During live viewport-height changes, retain the aligned lane
-    // instead of extending a tiny midpoint corridor through a lower obstacle.
-    const minimumLaneHeight = viewportHeight * 0.16;
-    ({ safeTop, safeBottom } = resolvePanelStackCorridor({
-      viewportHeight,
-      safeTop,
-      safeBottom,
-      obstacleSafeTop,
-      obstacleSafeBottom,
-      minimumHeight: minimumLaneHeight,
-    }));
-    const viewportMidpoint = viewportHeight * 0.5;
-    for (const panel of panels) {
-      const rect = panel.getBoundingClientRect();
-      if (panel.classList.contains('collapsed') && rect.height > 0) {
-        this._leftStackCollapsedHeights.set(panel.id, rect.height);
-      }
-    }
-
-    const expandedPanelsInDomOrder = panels.filter((panel) => !panel.classList.contains('collapsed'));
-    const preferredExpandedPanel = expandedPanelsInDomOrder.find(
-      (panel) => panel.id === this._leftStackPreferredPanelId,
-    );
-    // Auto-collapse is a presentation fallback, not permission to undo the
-    // user's newest disclosure. Measure and allocate that explicitly opened
-    // panel first so an older expanded sibling yields when the corridor cannot
-    // usefully present both (for example Map Stack followed by Scenes).
-    const expandedPanels = preferredExpandedPanel
-      ? [preferredExpandedPanel, ...expandedPanelsInDomOrder.filter((panel) => panel !== preferredExpandedPanel)]
-      : expandedPanelsInDomOrder;
-    // Clear the prior pass before reading intrinsic heights. The allocated
-    // outer height and the inner scroller otherwise feed their constrained
-    // size back into the next HUD-mode calculation.
-    for (const panel of expandedPanels) {
-      panel.style.removeProperty('--left-panel-allocated-height');
-    }
-    const availableHeight = Math.max(0, safeBottom - safeTop);
-    const naturalExpandedHeights = expandedPanels.map((panel) => this._measureLeftPanelNaturalHeight(panel));
-    const naturalExpandedHeight = naturalExpandedHeights.reduce((sum, height) => sum + height, 0);
-    const siblingHeight = panels.reduce((total, panel) => {
-      if (!panel.classList.contains('collapsed')) return total;
-      const measured = this._leftStackCollapsedHeights.get(panel.id);
-      return total + (measured || panel.getBoundingClientRect().height || 0);
-    }, 0);
-    let requiredHeight = siblingHeight;
-
-    const rowGap = parseFloat(getComputedStyle(stack).rowGap) || 0;
-    if (expandedPanels.length) {
-      requiredHeight += naturalExpandedHeight;
-      requiredHeight += rowGap * Math.max(0, panels.length - 1);
-    } else {
-      requiredHeight += rowGap * Math.max(0, panels.length - 1);
-    }
-
-    const wasFocused = stack.classList.contains('layout-focus');
-    const wasTail = stack.classList.contains('layout-tail');
-    const wasConstrained = wasFocused || wasTail;
-    const stabilityBand = viewportHeight * 0.01;
-    const exceedsCenteredCorridor = expandedPanels.length > 0 && (wasConstrained
-      ? requiredHeight > availableHeight - stabilityBand * 2
-      : requiredHeight > availableHeight - stabilityBand);
-    const tailRequiredHeight = naturalExpandedHeight
-      + siblingHeight
-      + rowGap * Math.max(0, panels.length - 1);
-    // A compact expansion should not make the whole control stack jump down
-    // merely to center a few short rows. Preserve the normal top anchor when
-    // the centered stack would begin below it; tall stacks can still grow
-    // upward around the viewport midpoint as their content requires.
-    const centeredTailTop = viewportMidpoint - tailRequiredHeight * 0.5;
-    const tailLayoutTop = Math.min(centeredTailTop, safeTop);
-    const tailLayoutBottom = tailLayoutTop + tailRequiredHeight;
-    const tailAvailableHeight = Math.max(0, obstacleSafeBottom - obstacleSafeTop);
-    const tailTolerance = wasTail ? stabilityBand : -stabilityBand;
-    const shouldTail = expandedPanels.length > 0
-      && tailLayoutTop >= obstacleSafeTop - tailTolerance
-      && tailLayoutBottom <= obstacleSafeBottom + tailTolerance;
-    const shouldFocus = exceedsCenteredCorridor && !shouldTail;
-    // Focus mode owns the lane, so let every expanded panel share the full
-    // obstacle-safe corridor. Tail/normal layouts keep the balanced
-    // viewport centering used for compact accordion stacks.
-    const layoutTop = shouldFocus
-      ? obstacleSafeTop
-      : shouldTail ? tailLayoutTop : safeTop;
-    const layoutBottom = shouldFocus
-      ? obstacleSafeBottom
-      : shouldTail ? tailLayoutBottom : safeBottom;
-    const topPct = (layoutTop / viewportHeight) * 100;
-    const bottomPct = ((viewportHeight - layoutBottom) / viewportHeight) * 100;
-    const topValue = `${topPct.toFixed(3)}vh`;
-    const bottomValue = `${bottomPct.toFixed(3)}vh`;
-    const expandedAvailableHeight = shouldFocus
-      ? Math.max(0, layoutBottom - layoutTop
-        - rowGap * Math.max(0, expandedPanels.length - 1))
-      : naturalExpandedHeight;
-    const allocatedExpandedHeights = allocatePanelStackHeights({
-      naturalHeights: naturalExpandedHeights,
-      availableHeight: expandedAvailableHeight,
-    });
-    const autoCollapseIndices = this.hud.visible ? panelStackAutoCollapseIndices({
-      naturalHeights: naturalExpandedHeights,
-      allocatedHeights: allocatedExpandedHeights,
-      collapseLaterPanels: shouldFocus && this.hud.getVariant() === 'tactical',
-    }) : [];
-    if (autoCollapseIndices.length) {
-      for (const index of autoCollapseIndices) {
-        const panel = expandedPanels[index];
-        panel.classList.add('collapsed', 'layout-auto-collapsed');
-        this._syncPanelCollapseButton(panel);
-      }
-      this._scheduleLeftPanelLayout();
-      return;
-    }
-    if (stack.style.getPropertyValue('--left-stack-safe-top') !== topValue) {
-      stack.style.setProperty('--left-stack-safe-top', topValue);
-    }
-    if (stack.style.getPropertyValue('--left-stack-safe-bottom') !== bottomValue) {
-      stack.style.setProperty('--left-stack-safe-bottom', bottomValue);
-    }
-    stack.style.removeProperty('--left-stack-centered-height');
-    for (const panel of panels) panel.style.removeProperty('--left-panel-allocated-height');
-    expandedPanels.forEach((panel, index) => {
-      panel.style.setProperty('--left-panel-allocated-height', `${allocatedExpandedHeights[index].toFixed(1)}px`);
-    });
-
-    stack.classList.toggle('layout-focus', shouldFocus);
-    stack.classList.toggle('layout-tail', shouldTail);
-    stack.dataset.layoutMode = shouldFocus ? 'focus' : shouldTail ? 'tail' : 'normal';
-    stack.dataset.safeTopPct = topPct.toFixed(2);
-    stack.dataset.safeBottomPct = (100 - bottomPct).toFixed(2);
-    stack.dataset.availableHeightPct = ((availableHeight / viewportHeight) * 100).toFixed(2);
-    stack.dataset.requiredHeightPct = ((requiredHeight / viewportHeight) * 100).toFixed(2);
-    stack.dataset.tailAvailableHeightPct = ((tailAvailableHeight / viewportHeight) * 100).toFixed(2);
-    stack.dataset.expandedCount = String(expandedPanels.length);
-
-    // Cockpit Display/Radio live in the opposite margin and no longer borrow
-    // this corridor: the left accordion's top is solved against left-lane
-    // obstacles, which put the strip straight through the briefing card.
-    // CockpitView.syncSignalLayout() owns `--cockpit-utility-top` instead.
-
-    for (const panel of panels) {
-      const hiddenSibling = shouldFocus && panel.classList.contains('collapsed');
-      if (hiddenSibling) panel.setAttribute('aria-hidden', 'true');
-      else panel.removeAttribute('aria-hidden');
-    }
-    // The right controls share this top baseline; update them after the left
-    // accordion commits an HUD-variant or obstacle-driven position change.
-    this._scheduleRightPanelLayout();
   }
 
   /**
@@ -9098,7 +8494,8 @@ export class StyleManager {
    * @returns {void}
    */
   _updateSliderPanel(styleName, { reveal = false } = {}) {
-    this._sliderContainer.innerHTML = '';
+    this._styleParameters ||= createStyleParameters({ container: this._sliderContainer });
+    this._styleParameters.clear();
     const shader = STYLES[styleName];
 
     if (!shader || !shader.uniforms || styleName === 'normal') {
@@ -9107,44 +8504,19 @@ export class StyleManager {
       return;
     }
 
-    for (const [uName, uMeta] of Object.entries(shader.uniforms)) {
-      const row = document.createElement('div');
-      row.className = 'param-slider-row';
-
-      const label = document.createElement('span');
-      label.className = 'param-label';
-      label.textContent = uMeta.label;
-
-      const slider = document.createElement('input');
-      slider.type = 'range';
-      slider.className = 'param-slider';
-      slider.setAttribute('aria-label', uMeta.label);
-      slider.min = uMeta.min;
-      slider.max = uMeta.max;
-      slider.step = uMeta.max <= 1 ? '0.01' : '0.1';
-      slider.value = this.stages[styleName].uniforms[uName];
-
-      const valueDisplay = document.createElement('span');
-      valueDisplay.className = 'param-value';
-      valueDisplay.textContent = parseFloat(slider.value).toFixed(uMeta.max <= 1 ? 2 : 1);
-
-      slider.addEventListener('input', () => {
+    this._styleParameters.render({
+      uniforms: shader.uniforms,
+      readValue: (uName) => this.stages[styleName].uniforms[uName],
+      writeValue: (uName, val) => {
         this.shareLinkManager?.claimRestoreLane?.('visual');
-        const val = parseFloat(slider.value);
         this.stages[styleName].uniforms[uName] = val;
-        valueDisplay.textContent = val.toFixed(uMeta.max <= 1 ? 2 : 1);
-        // Uniform writes don't auto-render under the idle governor —
-        // without this the slider visibly does nothing until the next
-        // camera move (browser finding). (perf wave 2)
+      },
+      onChange: () => {
+        // Uniform writes need an explicit render under the idle governor.
         governorRequestRender('style-param-slider');
         this._syncShareState();
-      });
-
-      row.appendChild(label);
-      row.appendChild(slider);
-      row.appendChild(valueDisplay);
-      this._sliderContainer.appendChild(row);
-    }
+      },
+    });
 
     this._sliderPanel.classList.add('active');
     this._scheduleRightPanelLayout();
@@ -9497,9 +8869,14 @@ export class StyleManager {
           return;
         }
         this._activeLocationSearchGeneration = generation;
+        this._locationSearchController?.abort();
+        const searchController = new AbortController();
+        this._locationSearchController = searchController;
         this._locationSearch.classList.add('searching');
         try {
           const destination = await searchAndFlyTo(this.viewer, query, {
+            placeSearch: this.placeSearch,
+            signal: searchController.signal,
             beforeFly: () => this._reassertNavigationHandoff(generation),
           });
           if (this._disposed || generation !== this._navigationGeneration) return;
@@ -9523,10 +8900,12 @@ export class StyleManager {
             this._showToast('Location not found');
           }
         } catch (err) {
+          if (searchController.signal.aborted) return;
           console.error('[Search] Geocoding failed:', err);
           if (this._disposed || generation !== this._navigationGeneration) return;
           this._showToast('Search failed');
         } finally {
+          if (this._locationSearchController === searchController) this._locationSearchController = null;
           this._settleLocationSearchUi(generation);
         }
       }
@@ -10310,6 +9689,13 @@ export class StyleManager {
     this._globalStatusNotice = null;
     if (this._globalLoadingStatus) this._globalLoadingStatus.hidden = true;
     this._disposed = true;
+    this._applicationShortcuts?.destroy();
+    this._styleParameters?.destroy();
+    for (const control of this._panelDisclosureControls || []) control.destroy();
+    this._panelDisclosureControls = [];
+    this._hoverPanelControls?.forEach((control) => control.destroy());
+    this._hoverPanelControls?.clear();
+    this._locationSearchController?.abort();
     this._cancelMapSourceFocus?.();
     // Revoke persistence/hash authority before teardown can emit manager changes.
     this._layerStateCoordinator?.destroy();
@@ -10414,10 +9800,6 @@ export class StyleManager {
       this._loadingVisibilityHandler = null;
     }
     this._stopLoadingFeedbackTicker();
-    if (this._globalKeydownHandler) {
-      document.removeEventListener('keydown', this._globalKeydownHandler);
-      this._globalKeydownHandler = null;
-    }
     if (this._poiKeydownHandler) {
       document.removeEventListener('keydown', this._poiKeydownHandler);
       this._poiKeydownHandler = null;

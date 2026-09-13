@@ -124,7 +124,11 @@
   "gbfs-provider": {
     "runtime": "node",
     "exports": ["./server/providers/gbfs"],
-    "modules": ["server/providers/gbfs.js", "src/data/gbfsSource.js"],
+    "modules": [
+      "server/providers/gbfs.js",
+      "server/providers/common/http.js",
+      "src/data/gbfsSource.js"
+    ],
     "external": []
   },
   "gbfs-source": {
@@ -247,6 +251,47 @@
       "server/standalone/key-setup.js",
       "src/keySetupCore.mjs",
       "src/keySetupHardening.mjs"
+    ],
+    "external": []
+  },
+  "place-search": {
+    "exports": ["./search"],
+    "modules": [
+      "src/search/index.js",
+      "src/search/placeSearch.js",
+      "src/search/google.js",
+      "src/keylessGeocoder.js"
+    ],
+    "external": []
+  },
+  "panel-disclosure": {
+    "exports": ["./ui/panels"],
+    "modules": ["src/ui/panelDisclosure.js"],
+    "external": []
+  },
+  "surface-keyboard": {
+    "exports": ["./ui/surfaces"],
+    "modules": ["src/ui/surfaceKeyboard.js"],
+    "external": []
+  },
+  "panel-rail-layout": {
+    "exports": ["./ui/layout"],
+    "modules": [
+      "src/ui/panelRails.js",
+      "src/ui/leftPanelRail.js",
+      "src/ui/rightPanelRail.js",
+      "src/ui/panelMeasurement.js",
+      "src/ui/panelRailGeometry.js",
+      "src/panelStackLayout.js"
+    ],
+    "external": []
+  },
+  "visual-input": {
+    "exports": ["./ui/input"],
+    "modules": [
+      "src/ui/visualInput.js",
+      "src/ui/applicationShortcuts.js",
+      "src/ui/styleParameters.js"
     ],
     "external": []
   }
