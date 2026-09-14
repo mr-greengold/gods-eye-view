@@ -1,5 +1,23 @@
 # Changelog
 
+- Let CLI tools, development launchers and the setup doctor use an explicit project directory while retaining their existing default paths.
+
+- Split application scene, controls, catalog, tools and HTML into reusable components; configure application request services and sources without changing global fetch. Preserve standalone markup and voice behavior. Explicit annotation navigation may resolve a distant named target.
+
+## Voice component boundaries
+
+- Separate voice controls, Realtime connection requests and the action runner.
+- Allow compatible endpoints and server-selected models through construction options.
+- Cancel pending token/SDP requests on Stop or teardown and reject expired secrets.
+
+
+## Configurable geospatial services
+
+- Compose geocoding, place context and routes through independent providers.
+- Allow compatible endpoint configuration without changing voice tools or annotation behavior.
+- Isolate configured source caches and reject results after cancellation.
+
+
 ## ALPR camera locations
 
 - Label the loaded camera count as nearby, show a purple-dot legend, and add

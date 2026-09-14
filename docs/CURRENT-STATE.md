@@ -1,5 +1,24 @@
 # God's Eye View Current State
 
+CLI tools and development launchers accept `GEV_PROJECT_ROOT` to select the project environment, dependencies and output directory. Their default remains this checkout; bundled tool resources and source checks stay relative to the script installation. The setup doctor also accepts an explicit `rootDir`.
+
+Application composition now uses shared scene/control/catalog/tool constructors and allowlisted HTML component templates. The standalone entry supplies settings and the default sources. Terrain, boundaries, weather, regional context and summaries use configurable services; renderer/action owners remain page-scoped. Annotation proximity guards remain on by default and allow distant targets only for explicit navigation.
+
+Voice controls compose a supplied action runner and connection controller.
+Realtime token and SDP requests live in a configurable backend, with independent
+transports and cancellation through response parsing. Stop and application
+teardown abort pending connections; reconnect requests a new client secret.
+Microphone, radio handoff, tool schemas and default model behavior are preserved.
+
+
+Geospatial lookups are composed through `src/search`: forward/reverse geocoding,
+text/nearby search and routing use configurable providers/endpoints. Annotation,
+HUD and voice consumers share the configured service. Existing Google/Photon
+selection, route/direct-line honesty and tool schemas are preserved. Node
+Google, OSRM and Nominatim adapters accept trusted construction-time configuration;
+request parameters cannot choose arbitrary upstream URLs. See APPLICATION.md.
+
+
 The optional **ALPR Cameras** layer shows community-mapped OpenStreetMap locations,
 not camera footage or plate records. City-scale queries use the existing Overpass
 provider, with capped results, retry, cached-data and incomplete-coverage notices.
